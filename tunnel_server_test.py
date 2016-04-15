@@ -18,7 +18,7 @@ if _platform == "linux" or _platform == "linux2":
 elif _platform == "darwin":
     TUNNEL_CORE = os.path.join(SOURCE_ROOT, 'darwin', 'psiphon-tunnel-core-x86_64')
 
-BIG_FILE_URL = "http://speedtest.wdc01.softlayer.com/downloads/test100.zip"
+BIG_FILE_URL = "http://speedtest.wdc01.softlayer.com/downloads/test10.zip"
 POOL_SIZE = 10
 
 # Increse the Pool size until it stop
@@ -80,7 +80,7 @@ def test_tunnel_core_server(server_entry, protocol = "SSH"):
     # Wait for tunnel connection established
     conn = _make_connection_to_server()
 
-    tunnel_established = time.time() - start_time
+    tunnel_established = time.time() - tunnel_start
     print 'Fully established took %s seconds' % (round(tunnel_established, 2))
 
     # Do the file download
@@ -100,7 +100,7 @@ def test_tunnel_core_server(server_entry, protocol = "SSH"):
             if p.returncode == 0:
                 processes.remove(p)
 
-    curl_finished = time.time() - start_time
+    curl_finished = time.time() - curl_start
     print 'Job finished, took %s seconds' % (round(curl_finished, 2))
 
     conn.kill()
