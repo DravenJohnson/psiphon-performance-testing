@@ -25,6 +25,7 @@ def _setup_config_file(encoded_server_entry, tunnel_protocol = "SSH"):
         "LocalSocksProxyPort" : 1080,
         "TunnelPoolSize" : POOL_SIZE,
         "ConnectionWorkerPoolSize" : POOL_SIZE,
+        "DisableRemoteServerListFetcher": True,
         "LogFilename": LOG_FILE_NAME,
     }
 
@@ -32,6 +33,9 @@ def _setup_config_file(encoded_server_entry, tunnel_protocol = "SSH"):
         json.dump(config, config_file)
 
 def _make_connection_to_server():
+
+    if os.path.isfile(LOG_FILE_NAME):
+        os.remove(LOG_FILE_NAME)
 
     cmd = '"%s" --config "%s"' % (TUNNEL_CORE, CONFIG_FILE_NAME)
 
@@ -48,7 +52,7 @@ def _make_connection_to_server():
                 for line in log_file:
                     line = json.loads(line)
                     if line['data'].get('count') != None:
-                        if line['data']['count'] == 1 and line['noticeType'] == 'Tunnels':
+                        if line['data']['count'] == POOL_SIZE and line['noticeType'] == 'Tunnels':
                             return proc
     else:
         print 'Tunnel Core Config file is missing'
@@ -64,17 +68,21 @@ def test_tunnel_core_server(server_entry, protocol = "SSH"):
     # Setup config file
     _setup_config_file(server_entry, protocol)
 
+    tunnel_start = time.time()
     # Make tunnel core connection to test server
     # AND
     # Wait for tunnel connection established
     conn = _make_connection_to_server()
+
+    tunnel_established = time.time() - start_time
+    print 'Fully established took %s seconds' % (round(tunnel_established, 2))
 
     # Do the file download
     # curl_cmd = 'curl --socks5 localhost:1080 -o /dev/null http://speedtest.wdc01.softlayer.com/downloads/test100.zip'
     curl_cmd = 'curl --silent --socks5 localhost:1080 -o /dev/null "%s"' % (BIG_FILE_URL)
     processes = []
 
-    start_time = time.time()
+    curl_start = time.time()
     print 'Starting the Crul processes...'
     while len(processes) < POOL_SIZE:
         processes.append(_big_file_curl(curl_cmd))
@@ -86,13 +94,11 @@ def test_tunnel_core_server(server_entry, protocol = "SSH"):
             if p.returncode == 0:
                 processes.remove(p)
 
-    end_time = time.time() - start_time
-    print 'Job finished, took %s seconds' % (round(end_time, 2))
+    curl_finished = time.time() - start_time
+    print 'Job finished, took %s seconds' % (round(curl_finished, 2))
 
     conn.kill()
     os.remove(CONFIG_FILE_NAME)
-
-
 
 if __name__ == "__main__":
     parser = optparse.OptionParser('usage: %prog [options]')
@@ -103,7 +109,6 @@ if __name__ == "__main__":
                       choices=('SSH', 'UNFRONTED-MEEK-OSSH', 'OSSH'),
                       help="specify once for each of: UNFRONTED-MEEK-OSSH, OSSH, SSH")
     (options, _) = parser.parse_args()
-
 
     if not options.protocol:
         test_tunnel_core_server(options.serverentry)
