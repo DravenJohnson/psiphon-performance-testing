@@ -6,11 +6,17 @@ import optparse
 import subprocess
 import multiprocessing
 
+from sys import platform as _platform
 
 SOURCE_ROOT = os.path.join(os.path.abspath('.'), 'Library')
-TUNNEL_CORE = os.path.join(SOURCE_ROOT, 'psiphon-tunnel-core')
 CONFIG_FILE_NAME = os.path.join(SOURCE_ROOT, 'tunnel-core-config.config')
 LOG_FILE_NAME = os.path.join(SOURCE_ROOT, 'tunnel-core-log.txt')
+
+# Check OS for different tunnel-core client
+if _platform == "linux" or _platform == "linux2":
+    TUNNEL_CORE = os.path.join(SOURCE_ROOT, 'linux', 'psiphon-tunnel-core-x86_64')
+elif _platform == "darwin":
+    TUNNEL_CORE = os.path.join(SOURCE_ROOT, 'darwin', 'psiphon-tunnel-core-x86_64')
 
 BIG_FILE_URL = "http://speedtest.wdc01.softlayer.com/downloads/test100.zip"
 POOL_SIZE = 10
