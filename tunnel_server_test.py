@@ -164,4 +164,11 @@ if __name__ == "__main__":
     if not options.server_entry:
         raise Exception("An encoded server entry is required to run this test")
 
-    test_tunnel_core_server(options.server_entry, options.protocol, int(options.download_size), options.api_disabled, options.tunnels, options.curl_download)
+    test_tunnel_core_server(
+        server_entry = options.server_entry,
+        protocol = options.protocol,
+        download_file_size = int(options.download_size),
+        api_disabled = options.api_disabled,
+        tunnels = options.tunnels,
+        curl_download = options.curl_download
+    )
