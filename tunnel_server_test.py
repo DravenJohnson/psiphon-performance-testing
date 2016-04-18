@@ -41,7 +41,7 @@ def _set_max_fds():
 def _setup_config(encoded_server_entry = None, tunnel_protocol = "SSH", api_disabled = False, tunnels = 1, verbose = False):
     config = {
         "ClientVersion": "0",
-        "ConnectionWorkerPoolSize" : tunnels,
+        "ConnectionWorkerPoolSize" : tunnels / 10,
         "DisableApi": api_disabled,
         "DisableRemoteServerListFetcher": True,
         "EmitDiagnosticNotices": verbose,
@@ -153,7 +153,7 @@ def _download_via_urllib(socks_proxy_port, download_url, parallel_downloads):
 
     print("Downloads finished in %.2f seconds" % (round(time.time() - urllib_start, 2)))
 
-def test_tunnel_core_server(server_entry, protocol = "SSH", download_file_size = 1, api_disabled = False, tunnels = 1, curl_download = False, verbose = False):
+def test_tunnel_core_server(server_entry, protocol = "SSH", download_file_size = 1, api_disabled = False, tunnels = 1, curl_download = False, verbose = False, no_download = False):
     tmp = tempfile.NamedTemporaryFile(delete=True)
     try:
         tmp.write(_setup_config(server_entry, protocol, api_disabled, tunnels, verbose))
@@ -170,10 +170,11 @@ def test_tunnel_core_server(server_entry, protocol = "SSH", download_file_size =
 
     # Download the dummy file in parallel tunnels + 1. 1 is added as a safety factor
     # to increase the likliehood that each tunnel is used in parallel simultaneously
-    if curl_download:
-	_download_via_curl(SOCKS_PROXY_PORT, "http://speedtest.wdc01.softlayer.com/downloads/test%d.zip" % download_file_size, tunnels + 1)
-    else:
-	_download_via_urllib(SOCKS_PROXY_PORT, "http://speedtest.wdc01.softlayer.com/downloads/test%d.zip" % download_file_size, tunnels + 1)
+    if not no_download:
+        if curl_download:
+            _download_via_curl(SOCKS_PROXY_PORT, "http://speedtest.wdc01.softlayer.com/downloads/test%d.zip" % download_file_size, tunnels + 1)
+        else:
+            _download_via_urllib(SOCKS_PROXY_PORT, "http://speedtest.wdc01.softlayer.com/downloads/test%d.zip" % download_file_size, tunnels + 1)
 
 if __name__ == "__main__":
     try:
@@ -186,6 +187,8 @@ if __name__ == "__main__":
         parser.add_option("-d", "--download-size", dest="download_size", default="10", action="store", type="choice",
                         choices=("10", "100"),
                         help="Choose the size of the dummy file to download as a speed test")
+        parser.add_option("-n", "--no-download", dest="no_download", default=False, action="store_true",
+                        help="Do not attempt to download a file through the proxy")
         parser.add_option("-p", "--protocol", dest="protocol", default="SSH", action="store", type="choice",
                         choices=("SSH", "UNFRONTED-MEEK-OSSH", "OSSH"),
                         help="specify once for each of: UNFRONTED-MEEK-OSSH, OSSH, SSH")
@@ -208,7 +211,8 @@ if __name__ == "__main__":
             api_disabled = options.api_disabled,
             tunnels = options.tunnels,
             curl_download = options.curl_download,
-            verbose = options.verbose
+            verbose = options.verbose,
+            no_download = options.no_download
         )
     except (KeyboardInterrupt, SystemExit):
         print("")
