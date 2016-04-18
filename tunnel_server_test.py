@@ -1,122 +1,174 @@
-import os
+#!/usr/bin/env python
+
 import json
-import time
-import shlex
 import optparse
+import os
+import shlex
 import subprocess
-import multiprocessing
+import tempfile
+import threading
+import time
+import urllib2
+import Queue
 
 from sys import platform as _platform
 
-SOURCE_ROOT = os.path.join(os.path.abspath('.'), 'Library')
-CONFIG_FILE_NAME = os.path.join(SOURCE_ROOT, 'tunnel-core-config.config')
-LOG_FILE_NAME = os.path.join(SOURCE_ROOT, 'tunnel-core-log.txt')
+SOURCE_ROOT = os.path.join(os.path.abspath("."), "Library")
+SOCKS_PROXY_PORT = 1080
 
 # Check OS for different tunnel-core client
 if _platform == "linux" or _platform == "linux2":
-    TUNNEL_CORE = os.path.join(SOURCE_ROOT, 'linux', 'psiphon-tunnel-core-x86_64')
+    TUNNEL_CORE = os.path.join(SOURCE_ROOT, "linux", "psiphon-tunnel-core-x86_64")
 elif _platform == "darwin":
-    TUNNEL_CORE = os.path.join(SOURCE_ROOT, 'darwin', 'psiphon-tunnel-core-x86_64')
-
-BIG_FILE_URL = "http://speedtest.wdc01.softlayer.com/downloads/test100.zip"
-POOL_SIZE = 10
+    TUNNEL_CORE = os.path.join(SOURCE_ROOT, "darwin", "psiphon-tunnel-core-x86_64")
 
 # Increse the Pool size until it stop
-def _setup_config_file(encoded_server_entry, tunnel_protocol = "SSH"):
+def _setup_config(encoded_server_entry = None, tunnel_protocol = "SSH", api_disabled = False, tunnels = 1):
     config = {
+        "ClientVersion": "0",
+        "DisableApi": api_disabled,
         "TargetServerEntry": encoded_server_entry, # Single Test Server Parameter
         "TunnelProtocol": tunnel_protocol,
         "PropagationChannelId" : "0", # Propagation Channel ID = "Testing"
         "SponsorId" : "0",
-        "LocalSocksProxyPort" : 1080,
-        "TunnelPoolSize" : POOL_SIZE,
-        "ConnectionWorkerPoolSize" : POOL_SIZE,
-        "DisableRemoteServerListFetcher": True,
-        "LogFilename": LOG_FILE_NAME,
+        "LocalSocksProxyPort" : SOCKS_PROXY_PORT,
+        "TunnelPoolSize" : tunnels,
+        "ConnectionWorkerPoolSize" : tunnels,
+        "DisableRemoteServerListFetcher": True
     }
 
-    with open(CONFIG_FILE_NAME, 'w+') as config_file:
-        json.dump(config, config_file)
+    return json.dumps(config)
 
-def _make_connection_to_server():
+def _block_and_establish_tunnels(config = None, tunnels = 1):
+    if not config:
+        print("Tunnel Core Config file is missing")
+        return
 
-    if os.path.isfile(LOG_FILE_NAME):
-        os.remove(LOG_FILE_NAME)
+    print("Tunnel Core is connecting...")
+    proc = subprocess.Popen([TUNNEL_CORE, "--config", "%s" % (config)], stderr=subprocess.PIPE)
 
-    cmd = '"%s" --config "%s"' % (TUNNEL_CORE, CONFIG_FILE_NAME)
+    # Breaking this loop means the process sent EOF to stderr, or 'tunnels' tunnels were established
+    while True:
+        line = proc.stderr.readline()
+        if not line:
+            break
 
-    proc = subprocess.Popen(shlex.split(cmd))
-
-    time.sleep(1)
-
-    if os.path.isfile(LOG_FILE_NAME):
-        print 'Tunnel Core is connecting...'
-        not_connected = True
-        while not_connected:
-            time.sleep(1)
-            with open(LOG_FILE_NAME, 'r') as log_file:
-                for line in log_file:
-                    line = json.loads(line)
-                    if line['data'].get('count') != None:
-                        if line['data']['count'] == POOL_SIZE and line['noticeType'] == 'Tunnels':
-                            return proc
-    else:
-        print 'Tunnel Core Config file is missing'
-
+        line = json.loads(line)
+        if line["data"].get("count") != None:
+            if line["noticeType"] == "Tunnels" and line["data"]["count"] == tunnels:
+                break
 
 def _big_file_curl(curl_cmd):
-
     proc = subprocess.Popen(shlex.split(curl_cmd))
 
     return proc
 
-def test_tunnel_core_server(server_entry, protocol = "SSH"):
-    # Setup config file
-    _setup_config_file(server_entry, protocol)
-
-    tunnel_start = time.time()
-    # Make tunnel core connection to test server
-    # AND
-    # Wait for tunnel connection established
-    conn = _make_connection_to_server()
-
-    tunnel_established = time.time() - tunnel_start
-    print 'Fully established took %s seconds' % (round(tunnel_established, 2))
-
-    # Do the file download
-    # curl_cmd = 'curl --socks5 localhost:1080 -o /dev/null http://speedtest.wdc01.softlayer.com/downloads/test100.zip'
-    curl_cmd = 'curl --silent --socks5 localhost:1080 -o /dev/null "%s"' % (BIG_FILE_URL)
+def _download_via_curl(socks_proxy_port, download_url, parallel_downloads):
+    curl_cmd = 'curl --silent --socks5 localhost:%d -o /dev/null "%s"' % (socks_proxy_port, download_url)
     processes = []
 
     curl_start = time.time()
-    print 'Starting the Crul processes...'
-    while len(processes) < POOL_SIZE:
+    print("Starting the download...")
+    while len(processes) <= parallel_downloads:
         processes.append(_big_file_curl(curl_cmd))
 
-    print 'Downloading files...'
+    print("Downloading files...")
     while len(processes) > 0:
         for p in processes:
             p.wait()
             if p.returncode == 0:
                 processes.remove(p)
 
-    curl_finished = time.time() - curl_start
-    print 'Job finished, took %s seconds' % (round(curl_finished, 2))
+    print("Downloads finished in %.2f seconds" % (round(time.time() - curl_start, 2)))
 
-    conn.kill()
-    os.remove(CONFIG_FILE_NAME)
+
+class ThreadProxiedUrl(threading.Thread):
+    def __init__(self, queue, proxy_port):
+	threading.Thread.__init__(self)
+	self.queue = queue
+	self.proxy_port = proxy_port
+
+    def run(self):
+	proxy = urllib2.ProxyHandler({'socks': '127.0.0.1:%d' % (self.proxy_port)})
+	opener = urllib2.build_opener(proxy)
+	urllib2.install_opener(opener)
+
+	while True:
+	    #grabs host from queue
+	    host = self.queue.get()
+
+	    urllib2.urlopen(host).read()
+
+	    #signals to queue job is done
+	    self.queue.task_done()
+
+def _download_via_urllib(socks_proxy_port, download_url, parallel_downloads):
+    queue = Queue.Queue()
+    urllib_start = time.time()
+
+    #spawn a pool of threads, and pass them queue instance
+    for i in range(parallel_downloads):
+	t = ThreadProxiedUrl(queue, socks_proxy_port)
+	t.setDaemon(True)
+	t.start()
+
+    #populate queue with data
+    for host in [download_url] * parallel_downloads:
+	queue.put(host)
+
+    #wait on the queue until everything has been processed
+    queue.join()
+
+    print("Downloads finished in %.2f seconds" % (round(time.time() - urllib_start, 2)))
+
+def test_tunnel_core_server(server_entry, protocol = "SSH", download_file_size = 1, api_disabled = False, tunnels = 1, curl_download = False):
+    tmp = tempfile.NamedTemporaryFile(delete=True)
+    try:
+        tmp.write(_setup_config(server_entry, protocol, api_disabled))
+        tmp.flush()
+
+        tunnel_start = time.time()
+        _block_and_establish_tunnels(tmp.name, tunnels)
+    finally:
+        tmp.close()  # deletes the file
+
+    print("All tunnels (%d) established in %.2f seconds" % (tunnels, round(time.time() - tunnel_start, 2)))
+
+    # Download the dummy file in parallel tunnels + 1. 1 is added as a safety factor
+    # to increase the likliehood that each tunnel is used in parallel simultaneously
+    if curl_download:
+	_download_via_curl(SOCKS_PROXY_PORT, "http://speedtest.wdc01.softlayer.com/downloads/test%d.zip" % download_file_size, tunnels + 1)
+    else:
+	_download_via_urllib(SOCKS_PROXY_PORT, "http://speedtest.wdc01.softlayer.com/downloads/test%d.zip" % download_file_size, tunnels + 1)
 
 if __name__ == "__main__":
-    parser = optparse.OptionParser('usage: %prog [options]')
+    parser = optparse.OptionParser("usage: %prog [options]")
 
-    parser.add_option("-s", "--server-entry", dest="serverentry", action="store", type="string",
-                      help="Please Enter the Encoded Server Entry.")
-    parser.add_option("-p", "--protocol", dest="protocol", action="store",
-                      choices=('SSH', 'UNFRONTED-MEEK-OSSH', 'OSSH'),
+    parser.add_option("-a", "--api-disabled", dest="api_disabled", default=False, action="store_true",
+                      help="Disable client requests to the web API")
+    parser.add_option("-c", "--curl-download", dest="curl_download", default=False, action="store_true",
+                      help="Disable client requests to the web API")
+    parser.add_option("-d", "--download-size", dest="download_size", default="1", action="store", type="choice",
+                      choices=("1", "10", "100"),
+                      help="Choose the size of the dummy file to download as a speed test")
+    parser.add_option("-p", "--protocol", dest="protocol", default="SSH", action="store", type="choice",
+                      choices=("SSH", "UNFRONTED-MEEK-OSSH", "OSSH"),
                       help="specify once for each of: UNFRONTED-MEEK-OSSH, OSSH, SSH")
+    parser.add_option("-s", "--server-entry", dest="server_entry", action="store", type="string",
+                      help="Please Enter the Encoded Server Entry.")
+    parser.add_option("-t", "--tunnels", dest="tunnels", default=10, action="store", type="int",
+                      help="The number of tunnels to create simultaneously")
     (options, _) = parser.parse_args()
 
-    if not options.protocol:
-        test_tunnel_core_server(options.serverentry)
-    else:
-        test_tunnel_core_server(options.serverentry, options.protocol)
+
+    if not options.server_entry:
+        raise Exception("An encoded server entry is required to run this test")
+
+    test_tunnel_core_server(
+        server_entry = options.server_entry,
+        protocol = options.protocol,
+        download_file_size = int(options.download_size),
+        api_disabled = options.api_disabled,
+        tunnels = options.tunnels,
+        curl_download = options.curl_download
+    )
