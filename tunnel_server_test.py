@@ -3,8 +3,10 @@
 import json
 import optparse
 import os
+import resource
 import shlex
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -21,6 +23,19 @@ if _platform == "linux" or _platform == "linux2":
     TUNNEL_CORE = os.path.join(SOURCE_ROOT, "linux", "psiphon-tunnel-core-x86_64")
 elif _platform == "darwin":
     TUNNEL_CORE = os.path.join(SOURCE_ROOT, "darwin", "psiphon-tunnel-core-x86_64")
+
+def _set_max_fds():
+    low_limit, high_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if os.geteuid() == 0:
+        print("Script was run with root privileges, raising FD limit")
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (65535*4, 65535*4))
+        except ValueError as e:
+            print("Cannot raise the file descriptor limit for a subprocess this high: %d" % (65536*4))
+            raise e
+            sys.exit(1)
+    else:
+        print("Script was run without root privileges, not modifying FD limits")
 
 # Increse the Pool size until it stop
 def _setup_config(encoded_server_entry = None, tunnel_protocol = "SSH", api_disabled = False, tunnels = 1):
@@ -39,19 +54,27 @@ def _setup_config(encoded_server_entry = None, tunnel_protocol = "SSH", api_disa
 
     return json.dumps(config)
 
-def _block_and_establish_tunnels(config = None, tunnels = 1):
+def _block_and_establish_tunnels(config = None, tunnels = 1, verbose = False):
     if not config:
         print("Tunnel Core Config file is missing")
         return
 
-    print("Tunnel Core is connecting...")
-    proc = subprocess.Popen([TUNNEL_CORE, "--config", "%s" % (config)], stderr=subprocess.PIPE)
+    print("Waiting for all tunnels to be established...")
+    proc = subprocess.Popen([TUNNEL_CORE, "--config", "%s" % (config)], stderr=subprocess.PIPE, close_fds=True, preexec_fn=_set_max_fds)
 
     # Breaking this loop means the process sent EOF to stderr, or 'tunnels' tunnels were established
+    verbose_warning = False
     while True:
         line = proc.stderr.readline()
         if not line:
             break
+
+        if verbose:
+            if not verbose_warning:
+                print("")
+                print("Verbose flag was enabled. Printing tunnel-core output")
+                verbose_warning = True
+            sys.stdout.write("  %s" % line)
 
         line = json.loads(line)
         if line["data"].get("count") != None:
@@ -59,9 +82,7 @@ def _block_and_establish_tunnels(config = None, tunnels = 1):
                 break
 
 def _big_file_curl(curl_cmd):
-    proc = subprocess.Popen(shlex.split(curl_cmd))
-
-    return proc
+    return subprocess.Popen(shlex.split(curl_cmd))
 
 def _download_via_curl(socks_proxy_port, download_url, parallel_downloads):
     curl_cmd = 'curl --silent --socks5 localhost:%d -o /dev/null "%s"' % (socks_proxy_port, download_url)
@@ -121,14 +142,14 @@ def _download_via_urllib(socks_proxy_port, download_url, parallel_downloads):
 
     print("Downloads finished in %.2f seconds" % (round(time.time() - urllib_start, 2)))
 
-def test_tunnel_core_server(server_entry, protocol = "SSH", download_file_size = 1, api_disabled = False, tunnels = 1, curl_download = False):
+def test_tunnel_core_server(server_entry, protocol = "SSH", download_file_size = 1, api_disabled = False, tunnels = 1, curl_download = False, verbose = False):
     tmp = tempfile.NamedTemporaryFile(delete=True)
     try:
-        tmp.write(_setup_config(server_entry, protocol, api_disabled))
+        tmp.write(_setup_config(server_entry, protocol, api_disabled, tunnels))
         tmp.flush()
 
         tunnel_start = time.time()
-        _block_and_establish_tunnels(tmp.name, tunnels)
+        _block_and_establish_tunnels(tmp.name, tunnels, verbose)
     finally:
         tmp.close()  # deletes the file
 
@@ -147,9 +168,9 @@ if __name__ == "__main__":
     parser.add_option("-a", "--api-disabled", dest="api_disabled", default=False, action="store_true",
                       help="Disable client requests to the web API")
     parser.add_option("-c", "--curl-download", dest="curl_download", default=False, action="store_true",
-                      help="Disable client requests to the web API")
-    parser.add_option("-d", "--download-size", dest="download_size", default="1", action="store", type="choice",
-                      choices=("1", "10", "100"),
+                      help="Download using a shell out to curl (uses urllib if not)")
+    parser.add_option("-d", "--download-size", dest="download_size", default="10", action="store", type="choice",
+                      choices=("10", "100"),
                       help="Choose the size of the dummy file to download as a speed test")
     parser.add_option("-p", "--protocol", dest="protocol", default="SSH", action="store", type="choice",
                       choices=("SSH", "UNFRONTED-MEEK-OSSH", "OSSH"),
@@ -158,6 +179,8 @@ if __name__ == "__main__":
                       help="Please Enter the Encoded Server Entry.")
     parser.add_option("-t", "--tunnels", dest="tunnels", default=10, action="store", type="int",
                       help="The number of tunnels to create simultaneously")
+    parser.add_option("-v", "--verbose", dest="verbose", default=False, action="store_true",
+                      help="Print all tunnel-core output to stdout")
     (options, _) = parser.parse_args()
 
 
@@ -170,5 +193,6 @@ if __name__ == "__main__":
         download_file_size = int(options.download_size),
         api_disabled = options.api_disabled,
         tunnels = options.tunnels,
-        curl_download = options.curl_download
+        curl_download = options.curl_download,
+        verbose = options.verbose
     )
