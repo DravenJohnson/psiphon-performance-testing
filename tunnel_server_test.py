@@ -14,6 +14,7 @@ import urllib2
 import Queue
 
 from sys import platform as _platform
+from multiprocessing import Pool, Process
 
 SOURCE_ROOT = os.path.join(os.path.abspath("."), "Library")
 SOCKS_PROXY_PORT = 1080
@@ -100,6 +101,9 @@ def _download_via_curl(socks_proxy_port, download_url, parallel_downloads):
             if p.returncode == 0:
                 processes.remove(p)
 
+    # pool = Pool(processes=parallel_downloads)
+    #
+    # pool.map(_big_file_curl, curl_cmd)
     print("Downloads finished in %.2f seconds" % (round(time.time() - curl_start, 2)))
 
 
@@ -158,9 +162,9 @@ def test_tunnel_core_server(server_entry, protocol = "SSH", download_file_size =
     # Download the dummy file in parallel tunnels + 1. 1 is added as a safety factor
     # to increase the likliehood that each tunnel is used in parallel simultaneously
     if curl_download:
-	_download_via_curl(SOCKS_PROXY_PORT, "http://speedtest.wdc01.softlayer.com/downloads/test%d.zip" % download_file_size, tunnels + 1)
+        _download_via_curl(SOCKS_PROXY_PORT, "http://speedtest.wdc01.softlayer.com/downloads/test%d.zip" % download_file_size, tunnels + 1)
     else:
-	_download_via_urllib(SOCKS_PROXY_PORT, "http://speedtest.wdc01.softlayer.com/downloads/test%d.zip" % download_file_size, tunnels + 1)
+        _download_via_urllib(SOCKS_PROXY_PORT, "http://speedtest.wdc01.softlayer.com/downloads/test%d.zip" % download_file_size, tunnels + 1)
 
 if __name__ == "__main__":
     parser = optparse.OptionParser("usage: %prog [options]")

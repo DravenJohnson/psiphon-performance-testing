@@ -19,7 +19,9 @@ This client on the repo is **only** for testing purposes and **ONLY** support `O
   python tunnel_server_test.py -s 'ServerEntry'
   ```
    - Run on default `SSH` protocol
+
   ***OR***
+
   ```bash
   python tunnel_server_test.py -s 'ServerEntry' -p 'Protocol'
   ```
