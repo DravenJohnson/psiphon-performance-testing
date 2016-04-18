@@ -38,20 +38,22 @@ def _set_max_fds():
         print("Script was run without root privileges, not modifying FD limits")
 
 # Increse the Pool size until it stop
-def _setup_config(encoded_server_entry = None, tunnel_protocol = "SSH", api_disabled = False, tunnels = 1):
+def _setup_config(encoded_server_entry = None, tunnel_protocol = "SSH", api_disabled = False, tunnels = 1, verbose = False):
     config = {
         "ClientVersion": "0",
-        "DisableApi": api_disabled,
-        "TargetServerEntry": encoded_server_entry, # Single Test Server Parameter
-        "TunnelProtocol": tunnel_protocol,
-        "PropagationChannelId" : "0", # Propagation Channel ID = "Testing"
-        "SponsorId" : "0",
-        "LocalSocksProxyPort" : SOCKS_PROXY_PORT,
-        "TunnelPoolSize" : tunnels,
         "ConnectionWorkerPoolSize" : tunnels,
-        "DisableRemoteServerListFetcher": True
+        "DisableApi": api_disabled,
+        "DisableRemoteServerListFetcher": True,
+        "EmitDiagnosticNotices": verbose,
+        "LocalSocksProxyPort" : SOCKS_PROXY_PORT,
+        "PropagationChannelId" : "0", # Propagation Channel ID = "Testing",
+        "SponsorId" : "0",
+        "TargetServerEntry": encoded_server_entry,
+        "TunnelPoolSize" : tunnels,
+        "TunnelProtocol": tunnel_protocol
     }
 
+    print(json.dumps(config))
     return json.dumps(config)
 
 def _block_and_establish_tunnels(config = None, tunnels = 1, verbose = False):
@@ -60,14 +62,15 @@ def _block_and_establish_tunnels(config = None, tunnels = 1, verbose = False):
         return
 
     print("Waiting for all tunnels to be established...")
-    proc = subprocess.Popen([TUNNEL_CORE, "--config", "%s" % (config)], stderr=subprocess.PIPE, close_fds=True, preexec_fn=_set_max_fds)
+    global TUNNEL_CORE_PROCESS
+    TUNNEL_CORE_PROCESS = subprocess.Popen([TUNNEL_CORE, "--config", "%s" % (config)], stderr=subprocess.PIPE, close_fds=True, preexec_fn=_set_max_fds)
 
-    # Breaking this loop means the process sent EOF to stderr, or 'tunnels' tunnels were established
+    # Breaking this loop means 'tunnels' number of tunnels were established
     verbose_warning = False
     while True:
-        line = proc.stderr.readline()
+        line = TUNNEL_CORE_PROCESS.stderr.readline()
         if not line:
-            break
+            raise Exception("EOF received from tunnel-core subprocess")
 
         if verbose:
             if not verbose_warning:
@@ -77,6 +80,10 @@ def _block_and_establish_tunnels(config = None, tunnels = 1, verbose = False):
             sys.stdout.write("  %s" % line)
 
         line = json.loads(line)
+
+        if line["noticeType"] == "SocksProxyPortInUse":
+            raise Exception("Defined SOCKS proxy port (%d) is already in use, cannot continue" % SOCKS_PROXY_PORT)
+
         if line["data"].get("count") != None:
             if line["noticeType"] == "Tunnels" and line["data"]["count"] == tunnels:
                 break
@@ -115,13 +122,17 @@ class ThreadProxiedUrl(threading.Thread):
 	urllib2.install_opener(opener)
 
 	while True:
-	    #grabs host from queue
-	    host = self.queue.get()
+            try:
+                #grabs host from queue
+                host = self.queue.get()
 
-	    urllib2.urlopen(host).read()
+                urllib2.urlopen(host).read()
 
-	    #signals to queue job is done
-	    self.queue.task_done()
+                #signals to queue job is done
+                self.queue.task_done()
+            except Exception as e:
+                print("Threaded urllib urlopen request threw an exception")
+                raise e
 
 def _download_via_urllib(socks_proxy_port, download_url, parallel_downloads):
     queue = Queue.Queue()
@@ -145,15 +156,17 @@ def _download_via_urllib(socks_proxy_port, download_url, parallel_downloads):
 def test_tunnel_core_server(server_entry, protocol = "SSH", download_file_size = 1, api_disabled = False, tunnels = 1, curl_download = False, verbose = False):
     tmp = tempfile.NamedTemporaryFile(delete=True)
     try:
-        tmp.write(_setup_config(server_entry, protocol, api_disabled, tunnels))
+        tmp.write(_setup_config(server_entry, protocol, api_disabled, tunnels, verbose))
         tmp.flush()
 
         tunnel_start = time.time()
-        _block_and_establish_tunnels(tmp.name, tunnels, verbose)
+        try:
+            _block_and_establish_tunnels(tmp.name, tunnels, verbose)
+            print("All tunnels (%d) established in %.2f seconds" % (tunnels, round(time.time() - tunnel_start, 2)))
+        except Exception as e:
+            raise e
     finally:
         tmp.close()  # deletes the file
-
-    print("All tunnels (%d) established in %.2f seconds" % (tunnels, round(time.time() - tunnel_start, 2)))
 
     # Download the dummy file in parallel tunnels + 1. 1 is added as a safety factor
     # to increase the likliehood that each tunnel is used in parallel simultaneously
@@ -163,36 +176,49 @@ def test_tunnel_core_server(server_entry, protocol = "SSH", download_file_size =
 	_download_via_urllib(SOCKS_PROXY_PORT, "http://speedtest.wdc01.softlayer.com/downloads/test%d.zip" % download_file_size, tunnels + 1)
 
 if __name__ == "__main__":
-    parser = optparse.OptionParser("usage: %prog [options]")
+    try:
+        parser = optparse.OptionParser("usage: %prog [options]")
 
-    parser.add_option("-a", "--api-disabled", dest="api_disabled", default=False, action="store_true",
-                      help="Disable client requests to the web API")
-    parser.add_option("-c", "--curl-download", dest="curl_download", default=False, action="store_true",
-                      help="Download using a shell out to curl (uses urllib if not)")
-    parser.add_option("-d", "--download-size", dest="download_size", default="10", action="store", type="choice",
-                      choices=("10", "100"),
-                      help="Choose the size of the dummy file to download as a speed test")
-    parser.add_option("-p", "--protocol", dest="protocol", default="SSH", action="store", type="choice",
-                      choices=("SSH", "UNFRONTED-MEEK-OSSH", "OSSH"),
-                      help="specify once for each of: UNFRONTED-MEEK-OSSH, OSSH, SSH")
-    parser.add_option("-s", "--server-entry", dest="server_entry", action="store", type="string",
-                      help="Please Enter the Encoded Server Entry.")
-    parser.add_option("-t", "--tunnels", dest="tunnels", default=10, action="store", type="int",
-                      help="The number of tunnels to create simultaneously")
-    parser.add_option("-v", "--verbose", dest="verbose", default=False, action="store_true",
-                      help="Print all tunnel-core output to stdout")
-    (options, _) = parser.parse_args()
+        parser.add_option("-a", "--api-disabled", dest="api_disabled", default=False, action="store_true",
+                        help="Disable client requests to the web API")
+        parser.add_option("-c", "--curl-download", dest="curl_download", default=False, action="store_true",
+                        help="Download using a shell out to curl (uses urllib if not)")
+        parser.add_option("-d", "--download-size", dest="download_size", default="10", action="store", type="choice",
+                        choices=("10", "100"),
+                        help="Choose the size of the dummy file to download as a speed test")
+        parser.add_option("-p", "--protocol", dest="protocol", default="SSH", action="store", type="choice",
+                        choices=("SSH", "UNFRONTED-MEEK-OSSH", "OSSH"),
+                        help="specify once for each of: UNFRONTED-MEEK-OSSH, OSSH, SSH")
+        parser.add_option("-s", "--server-entry", dest="server_entry", action="store", type="string",
+                        help="Please Enter the Encoded Server Entry.")
+        parser.add_option("-t", "--tunnels", dest="tunnels", default=10, action="store", type="int",
+                        help="The number of tunnels to create simultaneously")
+        parser.add_option("-v", "--verbose", dest="verbose", default=False, action="store_true",
+                        help="Print all tunnel-core output to stdout")
+        (options, _) = parser.parse_args()
 
 
-    if not options.server_entry:
-        raise Exception("An encoded server entry is required to run this test")
+        if not options.server_entry:
+            raise Exception("An encoded server entry is required to run this test")
 
-    test_tunnel_core_server(
-        server_entry = options.server_entry,
-        protocol = options.protocol,
-        download_file_size = int(options.download_size),
-        api_disabled = options.api_disabled,
-        tunnels = options.tunnels,
-        curl_download = options.curl_download,
-        verbose = options.verbose
-    )
+        test_tunnel_core_server(
+            server_entry = options.server_entry,
+            protocol = options.protocol,
+            download_file_size = int(options.download_size),
+            api_disabled = options.api_disabled,
+            tunnels = options.tunnels,
+            curl_download = options.curl_download,
+            verbose = options.verbose
+        )
+    except (KeyboardInterrupt, SystemExit):
+        print("")
+        print("Recieved ^C or system signal, exiting.")
+
+        TUNNEL_CORE_PROCESS.kill()
+
+        sys.exit(1)
+    except Exception as e:
+        TUNNEL_CORE_PROCESS.kill()
+        raise e
+    finally:
+        TUNNEL_CORE_PROCESS.kill()
