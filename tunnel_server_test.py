@@ -129,39 +129,7 @@ def _download_via_curl(socks_proxy_port, download_url, parallel_downloads):
       if p.returncode == 0:
         processes.remove(p)
 
-<<<<<<< HEAD
-    # pool = Pool(processes=parallel_downloads)
-    #
-    # pool.map(_big_file_curl, curl_cmd)
-    print("Downloads finished in %.2f seconds" % (round(time.time() - curl_start, 2)))
-
-
-class ThreadProxiedUrl(threading.Thread):
-    def __init__(self, queue, proxy_port):
-	threading.Thread.__init__(self)
-	self.queue = queue
-	self.proxy_port = proxy_port
-
-    def run(self):
-	proxy = urllib2.ProxyHandler({'socks': '127.0.0.1:%d' % (self.proxy_port)})
-	opener = urllib2.build_opener(proxy)
-	urllib2.install_opener(opener)
-
-	while True:
-            try:
-                #grabs host from queue
-                host = self.queue.get()
-
-                urllib2.urlopen(host).read()
-
-                #signals to queue job is done
-                self.queue.task_done()
-            except Exception as e:
-                print("Threaded urllib urlopen request threw an exception")
-                raise e
-=======
   print("Downloads finished in %.2f seconds" % (round(time.time() - curl_start, 2)))
->>>>>>> fce029e3ecda12084c9a062d9a747841a499f9f8
 
 def _download_via_urllib(socks_proxy_port, download_url, parallel_downloads):
   print("Starting file download")
