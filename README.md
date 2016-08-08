@@ -31,3 +31,26 @@ This client on the repo is **only** for testing purposes and **ONLY** support `O
 2. Add more protocol supports
 3. Automatically increase the POOL_SIZE based on the test result
 4. Maybe: intergrated into psinet?
+
+# Notes and Issues
+
+* If no protocol `-p` is specified, then SSH is attempted.  If SSH is not an
+enabled capability on the server then a cryptic error is emitted:
+  ```
+Traceback (most recent call last):
+  File "./tunnel_server_test.py", line 236, in <module>
+    no_download = options.no_download
+  File "./tunnel_server_test.py", line 158, in test_tunnel_core_server
+    raise e
+__main__.TunnelCoreEOF: EOF received from tunnel-core subprocess
+  ```
+
+* Use `-v` to see what tunnel-core log lines.
+
+* Disable API requests (`-a`) if receiving the message:
+  ```
+  {"data":{"directTCPDialAddress":"45.33.37.171:593","ipAddress":"45.33.37.171","protocol":"OSSH","region":"US"},"noticeType":"ConnectingServer","showUser":false,"timestamp":"2016-08-08T16:22:37Z"}
+  {"data":{"message":"starting server context for 45.33.37.171"},"noticeType":"Info","showUser":false,"timestamp":"2016-08-08T16:22:38Z"}
+  {"data":{"message":"failed to connect to 45.33.37.171: psiphon.EstablishTunnel#149: error starting server context for 45.33.37.171: psiphon.NewServerContext#104: psiphon.(*ServerContext).doHandshakeRequest#127: psiphon.(*ServerContext).doGetRequest#567: Get 
+http://45.33.37.171:8257/handshake?client_sess...45.33.37.171:8257: getsockopt: connection refused)"},"noticeType":"Info","showUser":false,"timestamp":"2016-08-08T16:22:38Z"}
+  ```
